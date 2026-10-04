@@ -1,0 +1,104 @@
+<!doctype html>
+<html><head><meta charset="utf-8"></head><body style="margin:0">
+<script>
+/* Runs the user's code INSIDE THE VISITOR'S BROWSER (Pyodide / JS in a Web Worker).
+   Nothing is executed on the server. A worker can be killed on timeout, so an infinite
+   loop cannot freeze the page. Streamlit custom-component protocol, no build step. */
+const PYODIDE = "https://cdn.jsdelivr.net/pyodide/v0.29.5/full/";
+
+const PY_WORKER = `
+importScripts("${PYODIDE}pyodide.js");
+let py = null;
+const HELPER = \`
+import sys, traceback
+from pyodide.code import eval_code_async
+async def _ide_run(code, path):
+    g = {"__name__": "__main__", "__file__": path}
+    try:
+        await eval_code_async(code, g, filename=path)
+    except SystemExit:
+        pass
+    except BaseException as e:
+        tb = [f for f in traceback.extract_tb(e.__traceback__)
+              if f.filename.startswith("/home/pyodide/")]
+        out = ""
+        if tb:
+            out += "Traceback (most recent call last):\\\\n" + "".join(traceback.format_list(tb))
+        out += "".join(traceback.format_exception_only(type(e), e))
+        sys.stderr.write(out.replace("/home/pyodide/", ""))
+\`;
+onmessage = async (ev) => {
+  const { files, entry, stdin } = ev.data;
+  const out = [], err = [];
+  try {
+    if (!py) { py = await loadPyodide({ indexURL: "${PYODIDE}" }); await py.runPythonAsync(HELPER); }
+    py.setStdout({ batched: s => out.push(s) });
+    py.setStderr({ batched: s => err.push(s) });
+    const lines = (stdin || "").split("\\n"); let i = 0;
+    py.setStdin({ stdin: () => (i < lines.length ? lines[i++] : null) });
+    for (const [n, c] of Object.entries(files)) {
+      if (/^[\\w .-]+$/.test(n)) py.FS.writeFile("/home/pyodide/" + n, c);
+    }
+    await py.runPythonAsync("import os, sys, importlib\\nos.chdir('/home/pyodide')\\n" +
+      "sys.path.insert(0, '/home/pyodide') if '/home/pyodide' not in sys.path else None\\n" +
+      "importlib.invalidate_caches()\\n" +
+      "for m in [k for k, v in list(sys.modules.items()) if getattr(v, '__file__', '') and str(v.__file__).startswith('/home/pyodide/')]:\\n    sys.modules.pop(m, None)");
+    const code = files[entry];
+    try { await py.loadPackagesFromImports(code); } catch (e) { err.push("Package load: " + e.message + "\\n"); }
+    py.globals.set("_code", code); py.globals.set("_path", "/home/pyodide/" + entry);
+    await py.runPythonAsync("await _ide_run(_code, _path)");
+  } catch (e) { err.push(String(e && e.message || e)); }
+  postMessage({ stdout: out.join("\\n"), stderr: err.join("\\n") });
+};`;
+
+const JS_WORKER = `
+onmessage = (ev) => {
+  const out = [], err = [];
+  const fmt = a => a.map(x => typeof x === "string" ? x : (() => { try { return JSON.stringify(x); } catch (e) { return String(x); } })()).join(" ");
+  console.log = (...a) => out.push(fmt(a)); console.info = console.log;
+  console.error = (...a) => err.push(fmt(a)); console.warn = console.error;
+  try { (0, eval)(ev.data.files[ev.data.entry]); } catch (e) { err.push(String(e && e.stack || e)); }
+  postMessage({ stdout: out.join("\\n"), stderr: err.join("\\n") });
+};`;
+
+const send = (type, data) => window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), "*");
+let lastRun = 0, pyWorker = null, jsWorker = null, pyWarm = false;
+
+function worker(kind) {
+  if (kind === "py" && pyWorker) return pyWorker;
+  if (kind === "js" && jsWorker) return jsWorker;
+  const w = new Worker(URL.createObjectURL(new Blob([kind === "py" ? PY_WORKER : JS_WORKER], { type: "text/javascript" })));
+  if (kind === "py") pyWorker = w; else jsWorker = w;
+  return w;
+}
+
+function run(a) {
+  const kind = a.lang === "javascript" ? "js" : "py";
+  const w = worker(kind);
+  const t0 = performance.now();
+  const timeoutMs = (a.timeout || 20) * 1000;
+  let done = false;
+  const finish = (res) => {
+    if (done) return; done = true; clearTimeout(timer);
+    w.onmessage = null;
+    if (kind === "py" && !(res.stderr || "").startsWith("Stopped")) pyWarm = true;
+    send("streamlit:setComponentValue", { dataType: "json", value: Object.assign({ run_id: a.run_id, ms: Math.round(performance.now() - t0) }, res) });
+  };
+  // First Python run downloads the runtime (~10 MB), so give it extra time.
+  const timer = setTimeout(() => {
+    w.terminate(); if (kind === "py") pyWorker = null; else jsWorker = null;
+    finish({ stdout: "", stderr: "Stopped: the program ran longer than " + (a.timeout || 20) + " s (infinite loop?)." });
+  }, kind === "py" && !pyWarm ? timeoutMs + 40000 : timeoutMs);
+  w.onmessage = (ev) => finish(ev.data);
+  w.onerror = (ev) => finish({ stdout: "", stderr: "Runtime error: " + (ev.message || "worker failed to start (is the Python CDN reachable?)") });
+  w.postMessage({ files: a.files, entry: a.entry, stdin: a.stdin });
+}
+
+window.addEventListener("message", (ev) => {
+  if (ev.data.type !== "streamlit:render") return;
+  const a = ev.data.args || {};
+  if (a.run_id && a.run_id > lastRun) { lastRun = a.run_id; run(a); }
+});
+send("streamlit:componentReady", { apiVersion: 1 });
+send("streamlit:setFrameHeight", { height: 0 });
+</script></body></html>
