@@ -6,7 +6,7 @@ from core.codegen import build_prompt, clamp, run_python
 
 def test_build_prompt_contains_fence_rule():
     """Every prompt must contain the 'ONLY one fenced code block' instruction."""
-    for mode in ("Generate", "Explain", "Fix / Debug", "Refactor", "Add tests", "Add comments"):
+    for mode in ("Generate", "Fix / Debug", "Refactor", "Add tests", "Add comments"):
         p = build_prompt(mode, "Python", "hello world", code="x=1")
         assert "ONLY one fenced code block" in p, f"Missing fence rule in mode={mode}"
 
@@ -38,3 +38,16 @@ def test_run_python_rejects_secrets():
     stdout2, stderr2, rc2 = run_python("print('hello')")  # benign code
     assert "GROQ_API_KEY" not in stdout2
     assert "GROQ_API_KEY" not in stderr2
+
+
+def test_run_enabled_default_off(monkeypatch):
+    from core.codegen import run_enabled
+    monkeypatch.delenv("ENABLE_CODE_RUN", raising=False)
+    assert run_enabled({}) is False
+    assert run_enabled({"ENABLE_CODE_RUN": "true"}) is True
+    monkeypatch.setenv("ENABLE_CODE_RUN", "1")
+    assert run_enabled() is True
+
+
+def test_explain_prompt_allows_prose():
+    assert "ONLY one fenced" not in build_prompt("Explain", "Python", "", code="x=1")
