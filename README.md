@@ -16,9 +16,9 @@ An all-in-one AI workspace built with **Python · CrewAI · Groq · Streamlit**.
 | 🎞️ Slideshow Maker | Topic (or your notes) → editable slides with speaker notes; present in the browser or download `.pptx` / `.html`. |
 | 📅 Study Tracker | Deadlines with urgency colours, `.ics` export, one-click send to the Timetable Maker, focus timer, GPA calculator (no AI needed). |
 | 📄 Resume Studio | Form → live preview → PDF / Word; AI polish, tailor to a job ad, import from pasted text. |
-| 💻 Code Studio | AI code generator + mini IDE: generate, explain, fix, refactor in Python/JS/HTML/C++/SQL. |
+| 💻 Code Studio | Multi-file mini IDE with syntax highlighting, AI generate / edit / explain / fix / refactor / add tests, and a Run button for Python and JavaScript. |
 
-Code Studio runs Python in an isolated subprocess with a scrubbed environment (no secrets, no `GROQ_API_KEY`), a 5-second timeout, and 256 MB memory cap. HTML/CSS/JS gets a sandboxed browser preview; other languages are edit/download only.
+Code Studio runs your code **inside your own browser** (Python via Pyodide, JavaScript in a Web Worker) and never on the server, so it cannot reach the API key. Runs stop after 20 s. HTML/CSS/JS files get a live preview; other file types are edit/download only. Python can import the standard library plus packages Pyodide provides (numpy, pandas, matplotlib, ...).
 
 ## 📥 Downloads
 PDF, Word and Markdown for research, notes, slide notes and the editor · printable double-sided **flashcard PDF**, Quizlet CSV and Anki TSV · timetable CSV/.ics · resume PDF/Word ·
