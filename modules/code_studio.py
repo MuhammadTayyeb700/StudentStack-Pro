@@ -1,11 +1,12 @@
 """💻 Code Studio — AI code generator + mini IDE."""
-# pyrefly: ignore [missing-import]
 import streamlit as st
-# pyrefly: ignore [missing-import]
 import streamlit.components.v1 as components
 
 from core import llm, ui
-from core.codegen import LANGS, MODES, build_prompt, clamp, run_python, trim_history
+from core.codegen import LANGS, MODES, build_prompt, clamp, run_enabled, run_python, trim_history
+
+# Only these modes replace the editor; Explain / Add tests show their answer below it.
+REPLACE_MODES = {"Generate", "Fix / Debug", "Refactor", "Add comments"}
 
 # Try streamlit-ace; fall back to st.text_area.
 try:
@@ -62,16 +63,30 @@ def _generate(mode: str, lang: str, request: str, code: str, stderr: str):
         max_tokens=1500,
     )
     if raw:
-        result = llm.strip_fences(raw)
-        st.session_state["cs_code"] = result
+        result = llm.strip_fences(raw) if mode in REPLACE_MODES else raw.strip()
+        if mode in REPLACE_MODES:
+            st.session_state["cs_code"] = result
+            st.session_state.pop("cs_note", None)
+        else:
+            st.session_state["cs_note"] = (mode, result)
         history.append({"role": "assistant", "content": result})
         st.session_state["cs_history"] = trim_history(history)
     return raw
 
 
+def _fix_cb(lang: str) -> None:
+    """Runs before the editor is created, so it may safely replace the editor content."""
+    if not llm.get_api_key():
+        st.session_state["cs_nokey"] = True
+        return
+    _generate("Fix / Debug", lang, "", st.session_state.get("cs_code", ""),
+              st.session_state.get("cs_stderr", ""))
+
+
 def render():
     ui.page_header("💻", "Code Studio", "Generate, edit, run and fix code with AI.")
 
+    RUN_ON = run_enabled(st.secrets)
     left, right = st.columns([2, 3])
 
     with left:
@@ -87,12 +102,6 @@ def render():
                     _generate(mode, lang, request, st.session_state.get("cs_code", ""),
                               st.session_state.get("cs_stderr", ""))
 
-        # "Fix with AI" sends code + last stderr
-        stderr = st.session_state.get("cs_stderr", "")
-        if stderr and st.button("✨ Fix with AI"):
-            if ui.need_key():
-                with st.spinner("Fixing…"):
-                    _generate("Fix / Debug", lang, "", st.session_state.get("cs_code", ""), stderr)
 
     with right:
         code = _editor(lang, "cs_code")
@@ -101,8 +110,9 @@ def render():
 
         # Run (Python only)
         with btn_cols[0]:
-            can_run = lang == "Python" and bool(code.strip())
-            if st.button("▶️ Run", disabled=not can_run):
+            can_run = RUN_ON and lang == "Python" and bool(code.strip())
+            if st.button("▶️ Run", disabled=not can_run,
+                         help=None if RUN_ON else "Code execution is disabled on this server."):
                 with st.spinner("Running…"):
                     stdout, stderr_out, rc = run_python(code)
                     st.session_state["cs_stdout"] = stdout
@@ -148,3 +158,12 @@ def render():
                 st.error(stderr_val[:3000])
             if rc is not None:
                 st.caption(f"Exit code: {rc}")
+            if stderr_val and rc:
+                st.button("✨ Fix with AI", on_click=_fix_cb, args=(lang,))
+            if st.session_state.pop("cs_nokey", False):
+                ui.need_key()
+
+        note = st.session_state.get("cs_note")
+        if note:
+            st.markdown(f"#### {note[0]}")
+            st.markdown(note[1])
