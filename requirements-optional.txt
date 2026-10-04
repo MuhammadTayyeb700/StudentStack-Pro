@@ -1,0 +1,2 @@
+# Optional: enables the "Use live web search" switch in Research Agents
+ddgs>=9.0.0
