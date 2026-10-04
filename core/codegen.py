@@ -42,7 +42,7 @@ def build_prompt(mode: str, lang: str, request: str,
     if mode == "Generate":
         return base + f"Write code for: {request}"
     if mode == "Explain":
-        return base + f"Explain this code concisely:\n```\n{target}\n```"
+        return f"Language: {lang}.\nExplain this code concisely in plain Markdown (no need to repeat the code):\n```\n{target}\n```"
     if mode == "Fix / Debug":
         return base + f"Fix/debug this code. Error context: {request}\n```\n{target}\n```"
     if mode == "Refactor":
@@ -52,6 +52,17 @@ def build_prompt(mode: str, lang: str, request: str,
     if mode == "Add comments":
         return base + f"Add clear comments to this code:\n```\n{target}\n```"
     return base + request
+
+
+def run_enabled(secrets=None) -> bool:
+    """Code execution is OFF unless ENABLE_CODE_RUN is true (env var or Streamlit secret)."""
+    val = os.getenv("ENABLE_CODE_RUN", "")
+    if not val and secrets is not None:
+        try:
+            val = str(secrets.get("ENABLE_CODE_RUN", ""))
+        except Exception:  # noqa: BLE001
+            val = ""
+    return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def clamp(code: str, max_chars: int = 8000) -> str:
@@ -95,6 +106,10 @@ def run_python(code: str, timeout: int = 5) -> Tuple[str, str, int]:
 
         # Scrubbed environment: only PATH, no secrets.
         safe_env = {"PATH": os.environ.get("PATH", "")}
+        if sys.platform == "win32":  # Python on Windows fails to start without these
+            for k in ("SYSTEMROOT", "SYSTEMDRIVE", "TEMP", "TMP"):
+                if os.environ.get(k):
+                    safe_env[k] = os.environ[k]
 
         # Build preexec_fn for resource limits (Unix only).
         preexec = None
